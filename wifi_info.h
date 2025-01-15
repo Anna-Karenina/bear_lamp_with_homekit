@@ -6,7 +6,7 @@
 
 #define STATIC_IP                       // uncomment for static IP, set IP below
 #ifdef STATIC_IP
-  IPAddress ip(192,168,0,120);
+  IPAddress ip(192,168,0,121);
   IPAddress gateway(192,168,0,1);
   IPAddress subnet(255,255,255,0);
 #endif
