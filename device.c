@@ -11,7 +11,7 @@ homekit_characteristic_t cha_bright = HOMEKIT_CHARACTERISTIC_(BRIGHTNESS, 50);
 homekit_characteristic_t cha_sat = HOMEKIT_CHARACTERISTIC_(SATURATION, (float) 0);
 homekit_characteristic_t cha_hue = HOMEKIT_CHARACTERISTIC_(HUE, (float) 180);
 homekit_characteristic_t cha_battery_level = HOMEKIT_CHARACTERISTIC_(BATTERY_LEVEL, 100);
-homekit_characteristic_t cha_charging_state = HOMEKIT_CHARACTERISTIC_(CHARGING_STATE, 0);
+homekit_characteristic_t cha_charging_state = HOMEKIT_CHARACTERISTIC_(CHARGING_STATE, 1);
 homekit_characteristic_t cha_status_low_battery = HOMEKIT_CHARACTERISTIC_(STATUS_LOW_BATTERY, 0);
 
 homekit_accessory_t *accessories[] = {
@@ -21,7 +21,7 @@ homekit_accessory_t *accessories[] = {
             HOMEKIT_CHARACTERISTIC(MANUFACTURER, "AK::HomeKit"),
             HOMEKIT_CHARACTERISTIC(SERIAL_NUMBER, "11.09.1192"),
             HOMEKIT_CHARACTERISTIC(MODEL, "001"),
-            HOMEKIT_CHARACTERISTIC(FIRMWARE_REVISION, "1.2"),
+            HOMEKIT_CHARACTERISTIC(FIRMWARE_REVISION, "1.3"),
             HOMEKIT_CHARACTERISTIC(IDENTIFY, my_accessory_identify),
             NULL
         }),

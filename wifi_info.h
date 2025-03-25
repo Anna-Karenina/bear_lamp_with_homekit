@@ -1,7 +1,6 @@
 #ifndef WIFI_INFO_H_
 #define WIFI_INFO_H_
 
-
 #include <ESP8266WiFi.h>
 
 #define STATIC_IP                       // uncomment for static IP, set IP below
@@ -11,9 +10,8 @@
   IPAddress subnet(255,255,255,0);
 #endif
 
-
 const char *ssid = "TP-Link_5480";
-const char *password = "#########";
+const char *password = "92621442";
 
 void wifi_connect() {
 	WiFi.persistent(false);
