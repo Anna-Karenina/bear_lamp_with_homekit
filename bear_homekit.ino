@@ -29,6 +29,24 @@ const float voltageDivider = 2.0;
 const float fullBatteryVoltage = 4.20;
 const float emptyBatteryVoltage = 3.0;
 const float calibration = 0.0; //Check battery voltage using multimeter
+
+// Настройки для определения зарядки (возможно нужно изменить)
+const bool CHARGING_PIN_ACTIVE_LOW = true; // true если зарядка = LOW, false если зарядка = HIGH
+
+// Функция для калибровки батареи (вызывать при полной зарядке)
+void calibrate_battery() {
+  LOG_D("=== BATTERY CALIBRATION ===");
+  LOG_D("Connect multimeter to battery terminals");
+  LOG_D("Current readings:");
+  
+  for (int i = 0; i < 10; i++) {
+    float raw = analogRead(batteryPin);
+    float voltage = (raw / 1023.0) * 3.3 * voltageDivider + calibration;
+    LOG_D("Sample %d: Raw=%.0f, Voltage=%.3fV", i+1, raw, voltage);
+    delay(500);
+  }
+  LOG_D("=== END CALIBRATION ===");
+}
 float battery_samples[BATTERY_SAMPLES];
 int battery_sample_index = 0;
 
@@ -46,11 +64,14 @@ float read_battery_level() {
   
   float voltage = (avg_reading / 1023.0) * 3.3 * voltageDivider + calibration;
   
-  float battery_percentage = 100.0 * pow((voltage - emptyBatteryVoltage) / 
-                               (fullBatteryVoltage - emptyBatteryVoltage), 2);
+  // Линейная интерполяция для Li-ion батареи (более точная)
+  float battery_percentage = 100.0 * (voltage - emptyBatteryVoltage) / 
+                            (fullBatteryVoltage - emptyBatteryVoltage);
   
-  battery_percentage = constrain(battery_percentage, 1, 100);
-  LOG_D("Battery: %.1f%% (Voltage: %.2fV)", battery_percentage, voltage);
+  battery_percentage = constrain(battery_percentage, 0, 100);
+  
+  // Отладочная информация
+  LOG_D("Raw ADC: %.0f, Voltage: %.2fV, Battery: %.1f%%", avg_reading, voltage, battery_percentage);
   return battery_percentage;
 }
 
@@ -146,17 +167,22 @@ void my_homekit_setup() {
 
 void refresh_battery_status() {
   float level = read_battery_level();
+  bool charging = is_charging();
+  
+  // Обновляем значения характеристик
   cha_battery_level.value.float_value = level;
-    
-  // Обновление состояния зарядки и низкого уровня батареи
+  cha_charging_state.value.int_value = charging ? 1 : 0;
+  
+  // Обновление состояния низкого уровня батареи
   if (level < 15) { 
     cha_status_low_battery.value.int_value = 1;
   } else {
     cha_status_low_battery.value.int_value = 0;
   }
   
-  bool charging = is_charging();
-  cha_charging_state.value.int_value = charging ? 1 : 0;
+  // Детальная диагностика
+  LOG_D("Battery Status Update - Level: %.1f%%, Charging: %s, Low Battery: %s", 
+        level, charging ? "YES" : "NO", (level < 15) ? "YES" : "NO");
   
   // Если уровень критически низкий и не заряжается - уходим в глубокий сон
   if (level < 5 && !charging) {
@@ -165,13 +191,32 @@ void refresh_battery_status() {
     ESP.deepSleep(0);
   }
 
+  // Уведомляем HomeKit о изменениях
   homekit_characteristic_notify(&cha_battery_level, cha_battery_level.value);
   homekit_characteristic_notify(&cha_status_low_battery, cha_status_low_battery.value);
   homekit_characteristic_notify(&cha_charging_state, cha_charging_state.value);
 }
 
 bool is_charging() {
-  return digitalRead(chargingPin) == LOW;
+  int charging_pin_state = digitalRead(chargingPin);
+  bool charging;
+  
+  // Настраиваемая логика для определения зарядки
+  if (CHARGING_PIN_ACTIVE_LOW) {
+    charging = (charging_pin_state == LOW);
+  } else {
+    charging = (charging_pin_state == HIGH);
+  }
+  
+  // Отладочная информация для диагностики
+  static unsigned long last_debug = 0;
+  if (millis() - last_debug > 10000) { // Каждые 10 секунд
+    LOG_D("Charging pin (D1): %d, Active Low: %s, Charging: %s", 
+          charging_pin_state, CHARGING_PIN_ACTIVE_LOW ? "YES" : "NO", charging ? "YES" : "NO");
+    last_debug = millis();
+  }
+  
+  return charging;
 }
 
 void my_homekit_loop() {
