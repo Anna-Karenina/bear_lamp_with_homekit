@@ -6,7 +6,8 @@
 #define LOG_D(fmt, ...)   printf_P(PSTR(fmt "\n") , ##__VA_ARGS__);
 
 #define NEOPIN          D2
-#define NUMPIXELS       8
+#define NUMPIXELS       12
+#define BATTERY_SAMPLES 5
 
 Adafruit_NeoPixel pixels = Adafruit_NeoPixel(NUMPIXELS, NEOPIN, NEO_GRB + NEO_KHZ800);
 
@@ -26,26 +27,46 @@ const int chargingPin = D1;
 const int batteryPin = A0; 
 const float voltageDivider = 2.0;
 const float fullBatteryVoltage = 4.20;
-const float emptyBatteryVoltage = 3.3;
+const float emptyBatteryVoltage = 3.0;
 const float calibration = 0.0; //Check battery voltage using multimeter
+float battery_samples[BATTERY_SAMPLES];
+int battery_sample_index = 0;
 
 float read_battery_level() {
-  int analog_value = analogRead(batteryPin); // Чтение с аналогового пина (A0)
-  LOG_D("analog_value: %d", analog_value);
-
-  float voltage = (analog_value / 1023.0) * 3.3 * voltageDivider + calibration; // Примените делитель напряжения
-  float battery_percentage = ((voltage - 3.0) / (fullBatteryVoltage - emptyBatteryVoltage)) * 100; // Преобразование в проценты
-  if (battery_percentage < 0) battery_percentage = 1;
-  if (battery_percentage > 100) battery_percentage = 100;
-  LOG_D("battery_percentage: %f", battery_percentage);
+  // Собираем несколько samples для усреднения
+  battery_samples[battery_sample_index] = analogRead(batteryPin);
+  battery_sample_index = (battery_sample_index + 1) % BATTERY_SAMPLES;
+  
+  // Усредняем показания
+  float avg_reading = 0;
+  for (int i = 0; i < BATTERY_SAMPLES; i++) {
+    avg_reading += battery_samples[i];
+  }
+  avg_reading /= BATTERY_SAMPLES;
+  
+  float voltage = (avg_reading / 1023.0) * 3.3 * voltageDivider + calibration;
+  
+  float battery_percentage = 100.0 * pow((voltage - emptyBatteryVoltage) / 
+                               (fullBatteryVoltage - emptyBatteryVoltage), 2);
+  
+  battery_percentage = constrain(battery_percentage, 1, 100);
+  LOG_D("Battery: %.1f%% (Voltage: %.2fV)", battery_percentage, voltage);
   return battery_percentage;
 }
 
 void setup() {
   Serial.begin(115200);
-  wifi_connect(); // in wifi_info.h
 
   pinMode(chargingPin, INPUT);
+  pinMode(batteryPin, INPUT);
+
+  // Инициализируем массив батареи с задержками для стабилизации
+  for (int i = 0; i < BATTERY_SAMPLES; i++) {
+    battery_samples[i] = analogRead(batteryPin);
+    if (i < BATTERY_SAMPLES - 1) {
+      delay(10); // Небольшая задержка между чтениями
+    }
+  }
 
   pixels.begin(); 
   for(int i = 0; i < NUMPIXELS; i++) {
@@ -57,28 +78,45 @@ void setup() {
   rgb_colors[0] = 255;
   rgb_colors[1] = 255;
   rgb_colors[2] = 255;
+  wifi_connect(); // in wifi_info.h
 
   my_homekit_setup();
-  }
+}
 
 void loop() {
-    static unsigned long last_battery_update = 0; // Время последнего обновления батареи
-    static unsigned long last_homekit_update = 0;  // Время последнего обновления HomeKit
+  static unsigned long last_battery_update = 0;
+  static unsigned long last_homekit_update = 0;
+  static unsigned long last_heap_print = 0;
+  unsigned long current_time = millis();
 
-      unsigned long current_time = millis(); // Получаем текущее время
+  check_wifi_connection();
 
-      // Обновляем HomeKit каждую 10 мс
-      if (current_time - last_homekit_update >= 10) {
-          my_homekit_loop();
-          last_homekit_update = current_time; // Обновляем время последнего обновления HomeKit
-      }
-
-      // Обновляем уровень заряда батареи каждые 5 секунд
-      if (current_time - last_battery_update >= 5000) {
-        refresh_battery_status();
-        last_battery_update = current_time; // Обновляем время последнего обновления батареи
-      }
+  // Обновляем HomeKit каждые 100 мс (вместо 10 мс для снижения нагрузки)
+  if (current_time - last_homekit_update >= 100) {
+      my_homekit_loop();
+      last_homekit_update = current_time;
   }
+
+  // Обновляем уровень заряда батареи каждые 30 секунд (вместо 5)
+  if (current_time - last_battery_update >= 30000) {
+    refresh_battery_status();
+    last_battery_update = current_time;
+  }
+
+  // Вывод информации о памяти каждые 60 секунд
+  if (current_time - last_heap_print >= 60000) {
+    LOG_D("Free heap: %d, HomeKit clients: %d",
+        ESP.getFreeHeap(), arduino_homekit_connected_clients_count());
+    last_heap_print = current_time;
+    
+    // Автоперезагрузка при малом количестве памяти
+    if (ESP.getFreeHeap() < 4000) {
+      LOG_D("Low memory! Restarting...");
+      delay(1000);
+      ESP.restart();
+    }
+  }
+}
 
 //==============================
 // HomeKit setup and loop
@@ -94,7 +132,6 @@ extern "C" homekit_characteristic_t cha_battery_level;
 extern "C" homekit_characteristic_t cha_charging_state; 
 extern "C" homekit_characteristic_t cha_status_low_battery; 
 
-static uint32_t next_heap_millis = 0;
 
 void my_homekit_setup() {
   cha_on.setter = set_on;
@@ -108,34 +145,37 @@ void my_homekit_setup() {
 }
 
 void refresh_battery_status() {
-    cha_battery_level.value.float_value = read_battery_level();
-      
-    // Обновление состояния зарядки и низкого уровня батареи
-    if (cha_battery_level.value.float_value < 10) { // Если уровень батареи меньше 10% свичим в low-battery
-      cha_status_low_battery.value.int_value = 1;   // Низкий заряд
-    } else {
-      cha_status_low_battery.value.int_value = 0;   // Нормальный заряд
-    }
-    cha_charging_state.value.int_value = is_charging(); // Функция, которая определяет, заряжается ли устройство
+  float level = read_battery_level();
+  cha_battery_level.value.float_value = level;
+    
+  // Обновление состояния зарядки и низкого уровня батареи
+  if (level < 15) { 
+    cha_status_low_battery.value.int_value = 1;
+  } else {
+    cha_status_low_battery.value.int_value = 0;
+  }
+  
+  bool charging = is_charging();
+  cha_charging_state.value.int_value = charging ? 1 : 0;
+  
+  // Если уровень критически низкий и не заряжается - уходим в глубокий сон
+  if (level < 5 && !charging) {
+    LOG_D("Critical battery! Going to deep sleep...");
+    delay(1000);
+    ESP.deepSleep(0);
+  }
 
-    homekit_characteristic_notify(&cha_battery_level, cha_battery_level.value);
-    homekit_characteristic_notify(&cha_status_low_battery, cha_status_low_battery.value);
-    homekit_characteristic_notify(&cha_charging_state, cha_charging_state.value);
+  homekit_characteristic_notify(&cha_battery_level, cha_battery_level.value);
+  homekit_characteristic_notify(&cha_status_low_battery, cha_status_low_battery.value);
+  homekit_characteristic_notify(&cha_charging_state, cha_charging_state.value);
 }
 
 bool is_charging() {
-   return digitalRead(chargingPin) == LOW;
+  return digitalRead(chargingPin) == LOW;
 }
 
 void my_homekit_loop() {
   arduino_homekit_loop();
-  const uint32_t t = millis();
-  if (t > next_heap_millis) {
-    // show heap info every 5 seconds
-    next_heap_millis = t + 5 * 1000;
-    LOG_D("Free heap: %d, HomeKit clients: %d",
-        ESP.getFreeHeap(), arduino_homekit_connected_clients_count());
-  }
 }
 
 void set_on(const homekit_value_t v) {
@@ -154,8 +194,12 @@ void set_on(const homekit_value_t v) {
   void set_hue(const homekit_value_t v) {
       Serial.println("set_hue");
       float hue = v.float_value;
+      
+      // Валидация значения hue (0-360)
+      if (hue < 0.0) hue = 0.0;
+      if (hue > 360.0) hue = 360.0;
+      
       cha_hue.value.float_value = hue; //sync the value
-
       current_hue = hue;
       received_hue = true;
       
@@ -165,20 +209,27 @@ void set_on(const homekit_value_t v) {
   void set_sat(const homekit_value_t v) {
       Serial.println("set_sat");
       float sat = v.float_value;
+      
+      // Валидация значения saturation (0-100)
+      if (sat < 0.0) sat = 0.0;
+      if (sat > 100.0) sat = 100.0;
+      
       cha_sat.value.float_value = sat; //sync the value
-
       current_sat = sat;
       received_sat = true;
       
       updateColor();
-
   }
 
   void set_bright(const homekit_value_t v) {
       Serial.println("set_bright");
       int bright = v.int_value;
+      
+      // Валидация значения brightness (0-100)
+      if (bright < 0) bright = 0;
+      if (bright > 100) bright = 100;
+      
       cha_bright.value.int_value = bright; //sync the value
-
       current_brightness = bright;
 
       updateColor();
@@ -186,36 +237,43 @@ void set_on(const homekit_value_t v) {
 
 void updateColor() {
   if(is_on) {
-    if(received_hue && received_sat) {
+    // Обновляем RGB только если изменились hue или saturation
+    if(received_hue || received_sat) {
       HSV2RGB(current_hue, current_sat, current_brightness);
       received_hue = false;
       received_sat = false;
     }
         
-    int b = map(current_brightness,0, 100,75, 255);
-    Serial.println(b);
+    int b = map(current_brightness, 0, 100, 75, 255);
     pixels.setBrightness(b);
     for(int i = 0; i < NUMPIXELS; i++) {
-      pixels.setPixelColor(i, pixels.Color(rgb_colors[0],rgb_colors[1],rgb_colors[2]));
+      pixels.setPixelColor(i, pixels.Color(rgb_colors[0], rgb_colors[1], rgb_colors[2]));
     }
     pixels.show();
-  } else if(!is_on) { //lamp - switch to off
-      Serial.println("is_on == false");
-      pixels.setBrightness(0);
-      for(int i = 0; i < NUMPIXELS; i++) {
-        pixels.setPixelColor(i, pixels.Color(0,0,0));
-      }
-      pixels.show();
+  } else {
+    // Выключаем лампу
+    pixels.setBrightness(0);
+    for(int i = 0; i < NUMPIXELS; i++) {
+      pixels.setPixelColor(i, pixels.Color(0, 0, 0));
+    }
+    pixels.show();
   }
 }
 
-void HSV2RGB(float h,float s,float v) {
+void HSV2RGB(float h, float s, float v) {
+    // Валидация входных параметров
+    if (h < 0) h = 0;
+    if (h >= 360) h = fmod(h, 360);
+    if (s < 0) s = 0;
+    if (s > 100) s = 100;
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
 
     int i;
     float m, n, f;
 
-    s/=100;
-    v/=100;
+    s /= 100;
+    v /= 100;
 
     if(s==0){
       rgb_colors[0]=rgb_colors[1]=rgb_colors[2]=round(v*255);
@@ -226,7 +284,7 @@ void HSV2RGB(float h,float s,float v) {
     i=floor(h);
     f=h-i;
 
-    if(!(i&1)){
+    if(i&1){
       f=1-f;
     }
 

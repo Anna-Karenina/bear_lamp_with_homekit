@@ -21,7 +21,7 @@ homekit_accessory_t *accessories[] = {
             HOMEKIT_CHARACTERISTIC(MANUFACTURER, "AK::HomeKit"),
             HOMEKIT_CHARACTERISTIC(SERIAL_NUMBER, "11.09.1192"),
             HOMEKIT_CHARACTERISTIC(MODEL, "001"),
-            HOMEKIT_CHARACTERISTIC(FIRMWARE_REVISION, "1.3"),
+            HOMEKIT_CHARACTERISTIC(FIRMWARE_REVISION, "1.5"),
             HOMEKIT_CHARACTERISTIC(IDENTIFY, my_accessory_identify),
             NULL
         }),
